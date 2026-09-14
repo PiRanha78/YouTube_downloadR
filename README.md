@@ -1,61 +1,52 @@
-# YouTube DownloadR – GUI
+# YouTube DownloadR
 
-Egységes Windows GUI a három `.bat` letöltő helyett (`yt-dlp` + `ffmpeg`).
+Egységes GUI a `.bat` letöltők helyett (`yt-dlp` + `ffmpeg`).
 
 ## Funkciók
 
-- **MP3** – választható bitráta: 128 / 256 / 320 kbps  
-- **MP4** – mindig a legmagasabb elérhető minőség (`bestvideo+bestaudio` → mp4)  
+- **MP3** – bitráta: 128 / 256 / 320 kbps  
+- **MP4** – legmagasabb minőség  
 - **WAV** – veszteségmentes hang  
-- **Külön mappa minden mentéshez** – `downloads/<cím> [<videó-id>]/`  
-- Relatív útvonalak (nem kell `D:\YouTube_downloads\...`)  
-- yt-dlp frissítés gomb a GUI-ból  
+- Mentési mappa tallózása  
+- Minden letöltés külön alkönyvtárba  
+- Letöltési sáv + **Mappa megnyitás**  
+- Beágyazott yt-dlp + ffmpeg (külön telepítés nélkül)
 
-## Könyvtárstruktúra
+## Letöltés
 
-```
-YouTube_DownloadR/
-├── YouTube_DownloadR.exe   ← a build után
-├── ytd_gui.py              ← forrás (fejlesztéshez)
-├── build_exe.bat           ← .exe készítő
-├── app/
-│   ├── yt-dlp.exe
-│   └── ffmpeg-8.0.1-essentials_build/
-│       └── bin/
-│           └── ffmpeg.exe
-└── downloads/              ← alapértelmezett mentési gyökér
-```
+### Windows
+`release/YouTube_DownloadR/YouTube_DownloadR.exe` (~93 MB)  
+Natív ablak (Edge WebView2).
 
-## Kész .exe csomag
+### macOS (Intel)
+`release/macOS/YouTube_DownloadR.app`  
+Natív ablak (WebKit). Első indításkor a segédprogramok ide kerülnek:  
+`~/Library/Application Support/YouTube_DownloadR/runtime/`  
+Alapértelmezett mentési gyökér: `~/Documents/YouTube_DownloadR/downloads`
 
-```
-release/YouTube_DownloadR/YouTube_DownloadR.exe
-```
+> Gatekeeper: ha blokkolja, jobb klikk → Megnyitás, vagy:  
+> `xattr -dr com.apple.quarantine /útvonal/YouTube_DownloadR.app`
 
-Egyetlen fájl (~93 MB): a `yt-dlp` + `ffmpeg` + `ffprobe` be van ágyazva.  
-Natív Windows ablakban nyílik (Microsoft Edge WebView2, nem böngészőlap).  
-Első indításkor kibontja a segédprogramokat ide: `%LOCALAPPDATA%\YouTube_DownloadR\runtime\`  
-Nincs külön telepítő, nincs `app\` mappa.
+## Újrafordítás
 
-Ha az ablak nem jelenik meg, telepítsd a [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)-ot (Win10/11-en általában megvan).
-
-### Újrafordítás (macOS / Linux)
-
-Kell: [Go](https://go.dev/dl/)
+Kell: [Go](https://go.dev/dl/), macOS-en Xcode Command Line Tools.
 
 ```bash
+# Windows .exe (bármely OS-ről, ha megvan az app/ windows bináris)
 ./build_exe.sh
+
+# macOS Intel .app (csak Macen)
+./scripts/prepare_darwin_bundle.sh   # egyszer / frissítéskor
+./build_mac.sh
 ```
 
-### Alternatíva: Python GUI (Windows)
+## Fejlesztés
 
-```bat
-python ytd_gui.py
-build_exe.bat
+```bash
+# Python GUI (opcionális)
+python3 ytd_gui.py
 ```
-
-(A Python build nem ágyazza be a 90+ MB segédprogramokat.)
 
 ## Régi .bat fájlok
 
-A `yt-mp3-downloader.bat`, `yt-mp4-downloader.bat` és `yt-WAV-downloader.bat` továbbra is használhatók; a GUI ugyanazokat a segédprogramokat hívja, rugalmasabb beállításokkal.
+`yt-mp3-downloader.bat`, `yt-mp4-downloader.bat`, `yt-WAV-downloader.bat` – relatív `app\` útvonalakkal.

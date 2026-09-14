@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !darwin
 
 package main
 
@@ -9,7 +9,6 @@ import (
 
 var terminateUI func()
 
-// Fejlesztéshez (macOS/Linux): böngésző, amíg natív WebView2 csak Windows-on van.
 func runNativeUI(url string) {
 	openBrowser(url)
 	terminateUI = func() {

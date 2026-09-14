@@ -3,7 +3,6 @@ package main
 import (
 	"archive/zip"
 	"bytes"
-	"embed"
 	"fmt"
 	"io"
 	"os"
@@ -11,10 +10,7 @@ import (
 	"runtime"
 )
 
-//go:embed bundled/tools.zip
-var bundledZip embed.FS
-
-const bundledStamp = "bundle-1.0.0"
+const bundledStamp = "bundle-1.1.0"
 
 func runtimeToolsDir() (string, error) {
 	var root string
@@ -66,6 +62,15 @@ func ensureBundledTools() (ytDlp, ffmpeg string, err error) {
 	if err := extractBundledZip(dir); err != nil {
 		return "", "", fmt.Errorf("csomag kibontása: %w", err)
 	}
+	// macOS: végrehajtható bit biztosítása
+	_ = os.Chmod(ytPath, 0o755)
+	_ = os.Chmod(ffPath, 0o755)
+	if probe := filepath.Join(dir, "ffprobe"); fileExists(probe) {
+		_ = os.Chmod(probe, 0o755)
+	}
+	if probe := filepath.Join(dir, "ffprobe.exe"); fileExists(probe) {
+		_ = os.Chmod(probe, 0o755)
+	}
 	if !fileExists(ytPath) || !fileExists(ffPath) {
 		return "", "", fmt.Errorf("a csomag nem tartalmazza a %s / %s fájlokat", ytName, ffName)
 	}
@@ -74,7 +79,7 @@ func ensureBundledTools() (ytDlp, ffmpeg string, err error) {
 }
 
 func extractBundledZip(destDir string) error {
-	raw, err := bundledZip.ReadFile("bundled/tools.zip")
+	raw, err := bundledZip.ReadFile(bundledZipPath)
 	if err != nil {
 		return err
 	}

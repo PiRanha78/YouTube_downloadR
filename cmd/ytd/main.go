@@ -21,7 +21,7 @@ import (
 
 const (
 	appTitle   = "YouTube DownloadR"
-	appVersion = "1.0.0"
+	appVersion = "1.1.0"
 )
 
 //go:embed static/*
@@ -141,7 +141,15 @@ func appBaseDir() string {
 		return wd
 	}
 	exe, _ = filepath.EvalSymlinks(exe)
-	return filepath.Dir(exe)
+	dir := filepath.Dir(exe)
+	// .app csomag: ne a Contents/MacOS-be mentsünk
+	if runtime.GOOS == "darwin" && strings.Contains(dir, ".app/Contents/MacOS") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, "Documents", "YouTube_DownloadR")
+		}
+	}
+	return dir
 }
 
 func findYtDlp(base string) string {
