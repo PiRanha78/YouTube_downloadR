@@ -1,9 +1,26 @@
+# Operációs rendszerek szemetei
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+*.spec
+.venv/
+venv/
+env/
+
+# PHP
+vendor/
+.env
+
+# Cursor
+.cursor/history
+
 build/
 dist/
 release/
 downloads/
 cmd/ytd/bundled/tools.zip
-__pycache__/
-*.pyc
-*.spec
-.DS_Store
+
+
