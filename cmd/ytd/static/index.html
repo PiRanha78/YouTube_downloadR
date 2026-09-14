@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YouTube DownloadR</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <h1 id="title">YouTube DownloadR</h1>
+      <p class="sub">YouTube videó / hang letöltése · yt-dlp + ffmpeg</p>
+    </header>
+
+    <label class="field">
+      <span>YouTube URL</span>
+      <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" />
+    </label>
+
+    <section class="card">
+      <div class="label">Formátum</div>
+      <div class="formats">
+        <label><input type="radio" name="format" value="mp3" checked /> MP3</label>
+        <label><input type="radio" name="format" value="mp4" /> MP4 (legmagasabb minőség)</label>
+        <label><input type="radio" name="format" value="wav" /> WAV</label>
+      </div>
+      <label class="bitrate-row" id="bitrateRow">
+        <span>MP3 bitráta</span>
+        <select id="bitrate">
+          <option value="128">128</option>
+          <option value="256">256</option>
+          <option value="320" selected>320</option>
+        </select>
+        <span class="unit">kbps</span>
+      </label>
+    </section>
+
+    <div class="field">
+      <span>Mentési mappa</span>
+      <div class="dest-row">
+        <input id="dest" type="text" placeholder="Pl. D:\YouTube_downloads" />
+        <button id="browse" type="button">Tallózás…</button>
+      </div>
+    </div>
+    <p class="hint">A választott mappán belül minden letöltés saját alkönyvtárba kerül.</p>
+
+    <div class="actions">
+      <button id="download" class="primary" type="button">Letöltés</button>
+      <button id="cancel" type="button" disabled>Megszakítás</button>
+      <button id="update" type="button">yt-dlp frissítés</button>
+      <button id="quit" type="button" class="danger right">Kilépés</button>
+    </div>
+
+    <section class="dl-strip" id="dlStrip" aria-label="Letöltés állapota">
+      <div class="dl-main">
+        <div class="dl-top">
+          <span class="dl-label">Letöltés</span>
+          <span id="dlState" class="dl-state">Készen áll</span>
+        </div>
+        <div class="dl-track" id="dlTrack">
+          <div class="dl-fill" id="dlFill"></div>
+        </div>
+        <p id="dlPath" class="dl-path" title="">—</p>
+      </div>
+      <button id="openFolder" type="button" class="dl-open" disabled title="Letöltési mappa megnyitása">
+        Mappa megnyitás
+      </button>
+    </section>
+
+    <pre id="log" class="log"></pre>
+    <p id="tools" class="tools"></p>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
