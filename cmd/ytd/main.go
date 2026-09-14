@@ -9,10 +9,10 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	netURL "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -393,17 +393,12 @@ func (s *server) doDownload(ctx context.Context, url, destRoot, format, bitrate 
 	}
 	s.emit("Formátum: " + strings.ToUpper(format) + extra)
 
-	title, id := s.probeTitleID(ctx, url)
-	folder := sanitizeFolderName(fmt.Sprintf("%s [%s]", title, id))
-	outDir := filepath.Join(destRoot, folder)
-	if _, err := os.Stat(outDir); err == nil {
-		for n := 2; ; n++ {
-			cand := filepath.Join(destRoot, fmt.Sprintf("%s_%d", folder, n))
-			if _, err := os.Stat(cand); os.IsNotExist(err) {
-				outDir = cand
-				break
-			}
-		}
+	playlist := isPlaylistURL(url)
+	outDir := destRoot
+	if playlist {
+		s.emit("Playlist észlelve (list=) – videónként külön alkönyvtár.")
+	} else {
+		s.emit("Egyetlen videó – mentés közvetlenül a kiválasztott mappába.")
 	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		s.emit("Mappa hiba: " + err.Error())
@@ -412,7 +407,7 @@ func (s *server) doDownload(ctx context.Context, url, destRoot, format, bitrate 
 	}
 	s.emit("Mappa: " + outDir)
 
-	args := s.buildArgs(url, outDir, format, bitrate)
+	args := s.buildArgs(url, outDir, format, bitrate, playlist)
 	s.emit("Parancs: " + s.ytDlp + " " + strings.Join(args, " "))
 	code := s.runCmd(ctx, s.ytDlp, args...)
 	if code == 0 {
@@ -427,39 +422,36 @@ func (s *server) doDownload(ctx context.Context, url, destRoot, format, bitrate 
 	}
 }
 
-func (s *server) probeTitleID(ctx context.Context, url string) (string, string) {
-	cmd := exec.CommandContext(ctx, s.ytDlp, "--no-playlist", "--print", "%(title)s\n%(id)s", url)
-	hideWindow(cmd)
-	out, err := cmd.Output()
+func isPlaylistURL(raw string) bool {
+	u, err := netURL.Parse(raw)
 	if err != nil {
-		stamp := time.Now().Format("20060102_150405")
-		return "letoltes_" + stamp, stamp
+		return strings.Contains(strings.ToLower(raw), "list=")
 	}
-	lines := strings.Split(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n")
-	var cleaned []string
-	for _, ln := range lines {
-		ln = strings.TrimSpace(ln)
-		if ln != "" {
-			cleaned = append(cleaned, ln)
-		}
-	}
-	if len(cleaned) >= 2 {
-		return cleaned[0], cleaned[1]
-	}
-	if len(cleaned) == 1 {
-		return cleaned[0], time.Now().Format("150405")
-	}
-	stamp := time.Now().Format("20060102_150405")
-	return "letoltes_" + stamp, stamp
+	return strings.TrimSpace(u.Query().Get("list")) != ""
 }
 
-func (s *server) buildArgs(url, outDir, format, bitrate string) []string {
-	outTpl := filepath.Join(outDir, "%(title)s.%(ext)s")
+func (s *server) buildArgs(url, outDir, format, bitrate string, playlist bool) []string {
+	var outTpl string
+	if playlist {
+		// Playlist: playlist mappa / videónként saját alkönyvtár
+		outTpl = filepath.Join(
+			outDir,
+			"%(playlist)s",
+			"%(title)s [%(id)s]",
+			"%(title)s.%(ext)s",
+		)
+	} else {
+		outTpl = filepath.Join(outDir, "%(title)s.%(ext)s")
+	}
 	common := []string{
-		"--no-playlist",
 		"--ffmpeg-location", s.ffmpeg,
 		"--force-ipv4",
 		"-o", outTpl,
+	}
+	if playlist {
+		common = append([]string{"--yes-playlist"}, common...)
+	} else {
+		common = append([]string{"--no-playlist"}, common...)
 	}
 	switch format {
 	case "mp4":
@@ -574,25 +566,6 @@ func (s *server) broadcastLoop() {
 		}
 		s.clientsMu.Unlock()
 	}
-}
-
-func sanitizeFolderName(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = "letoltes"
-	}
-	re := regexp.MustCompile(`[<>:"/\\|?*\x00-\x1f]`)
-	name = re.ReplaceAllString(name, "_")
-	name = regexp.MustCompile(`\s+`).ReplaceAllString(name, " ")
-	name = strings.Trim(name, " .")
-	runes := []rune(name)
-	if len(runes) > 80 {
-		name = strings.TrimRight(string(runes[:80]), " .")
-	}
-	if name == "" {
-		return "letoltes"
-	}
-	return name
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

@@ -8,7 +8,8 @@ Egységes GUI a `.bat` letöltők helyett (`yt-dlp` + `ffmpeg`).
 - **MP4** – legmagasabb minőség  
 - **WAV** – veszteségmentes hang  
 - Mentési mappa tallózása  
-- Minden letöltés külön alkönyvtárba  
+- Egyetlen videó: közvetlenül a választott mappába  
+- Playlist (`list=` a URL-ben): videónként külön alkönyvtár  
 - Letöltési sáv + **Mappa megnyitás**  
 - Beágyazott yt-dlp + ffmpeg (külön telepítés nélkül)
 

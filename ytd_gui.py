@@ -9,7 +9,6 @@ Minden mentés külön könyvtárba kerül.
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import sys
 import threading
@@ -17,6 +16,7 @@ import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from urllib.parse import parse_qs, urlparse
 
 
 APP_TITLE = "YouTube DownloadR"
@@ -65,13 +65,12 @@ def find_ffmpeg(base: Path) -> Path | None:
     return None
 
 
-def sanitize_folder_name(name: str, max_len: int = 80) -> str:
-    name = name.strip() or "letoltes"
-    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
-    name = re.sub(r"\s+", " ", name).strip(" .")
-    if len(name) > max_len:
-        name = name[:max_len].rstrip(" .")
-    return name or "letoltes"
+def is_playlist_url(url: str) -> bool:
+    try:
+        q = parse_qs(urlparse(url).query)
+        return bool((q.get("list") or [""])[0].strip())
+    except Exception:
+        return "list=" in url.lower()
 
 
 class DownloadApp(tk.Tk):
@@ -197,7 +196,7 @@ class DownloadApp(tk.Tk):
         )
         ttk.Label(
             dest_row,
-            text="Minden letöltés külön alkönyvtárba kerül (cím + videó ID).",
+            text="Egyetlen videó közvetlenül ide mentődik. Playlist (list= a linkben): videónként külön mappa.",
             style="Muted.TLabel",
         ).pack(anchor=tk.W, pady=(4, 0))
 
@@ -361,43 +360,20 @@ class DownloadApp(tk.Tk):
             self.status_var.set("Frissítés sikertelen.")
             self._log(f"yt-dlp frissítés hibakód: {code}")
 
-    def _probe_title_id(self, url: str) -> tuple[str, str]:
-        assert self.yt_dlp is not None
-        cmd = [
-            str(self.yt_dlp),
-            "--no-playlist",
-            "--print",
-            "%(title)s\n%(id)s",
-            url,
-        ]
-        try:
-            completed = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
-            lines = [ln.strip() for ln in (completed.stdout or "").splitlines() if ln.strip()]
-            if len(lines) >= 2:
-                return lines[0], lines[1]
-            if len(lines) == 1:
-                return lines[0], datetime.now().strftime("%H%M%S")
-        except OSError as exc:
-            self.after(0, lambda: self._log(f"Cím lekérdezés hiba: {exc}"))
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return f"letoltes_{stamp}", stamp
-
     def _build_yt_cmd(
-        self, url: str, out_dir: Path, fmt: str, bitrate: str
+        self, url: str, out_dir: Path, fmt: str, bitrate: str, playlist: bool
     ) -> list[str]:
         assert self.yt_dlp is not None and self.ffmpeg is not None
         ffmpeg_loc = str(self.ffmpeg)
-        out_tpl = str(out_dir / "%(title)s.%(ext)s")
+        if playlist:
+            out_tpl = str(
+                out_dir / "%(playlist)s" / "%(title)s [%(id)s]" / "%(title)s.%(ext)s"
+            )
+        else:
+            out_tpl = str(out_dir / "%(title)s.%(ext)s")
         common = [
             str(self.yt_dlp),
-            "--no-playlist",
+            "--yes-playlist" if playlist else "--no-playlist",
             "--ffmpeg-location",
             ffmpeg_loc,
             "--force-ipv4",
@@ -454,23 +430,21 @@ class DownloadApp(tk.Tk):
     def _download_worker(
         self, url: str, dest_root: Path, fmt: str, bitrate: str
     ) -> None:
-        title, vid = self._probe_title_id(url)
-        folder_name = sanitize_folder_name(f"{title} [{vid}]")
-        out_dir = dest_root / folder_name
-        # Ütközés esetén számozás
-        if out_dir.exists():
-            n = 2
-            while (dest_root / f"{folder_name}_{n}").exists():
-                n += 1
-            out_dir = dest_root / f"{folder_name}_{n}"
+        playlist = is_playlist_url(url)
+        out_dir = dest_root
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             self.after(0, lambda: self._on_download_done(False, f"Mappa hiba: {exc}"))
             return
 
+        if playlist:
+            self.after(0, lambda: self._log("Playlist észlelve (list=) – videónként külön alkönyvtár."))
+        else:
+            self.after(0, lambda: self._log("Egyetlen videó – mentés közvetlenül a kiválasztott mappába."))
+
         self.after(0, lambda: self._log(f"Mappa: {out_dir}"))
-        cmd = self._build_yt_cmd(url, out_dir, fmt, bitrate)
+        cmd = self._build_yt_cmd(url, out_dir, fmt, bitrate, playlist)
         self.after(0, lambda: self._log("Parancs: " + " ".join(cmd)))
         code = self._run_cmd(cmd)
         if code == 0:
