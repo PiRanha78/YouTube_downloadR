@@ -8,7 +8,7 @@ ZIP="$BUNDLE_DIR/tools_windows.zip"
 APP="$ROOT/app"
 FFBIN="$APP/ffmpeg-8.0.1-essentials_build/bin"
 
-echo "[1/3] Beágyazandó Windows csomag…"
+echo "[1/3] Beágyazandó Windows csomag..."
 mkdir -p "$BUNDLE_DIR"
 STAGE="$(mktemp -d)"
 cleanup() { rm -rf "$STAGE"; }
@@ -25,9 +25,9 @@ rm -f "$ZIP"
 )
 echo "    tools_windows.zip: $(du -h "$ZIP" | awk '{print $1}')"
 
-echo "[2/3] Go build (windows/amd64)…"
+echo "[2/3] Go build (windows/amd64)..."
 mkdir -p "$OUT"
-# Windows buildhez kell egy placeholder darwin zip is? Nem – build tags.
+# Windows buildhez kell egy placeholder darwin zip is? Nem - build tags.
 # De go list a darwin fájlt nem fordítja. OK.
 # Ha tools_darwin.zip hiányzik, a windows build mégis OK, mert //go:build darwin.
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -C "$ROOT/cmd/ytd" \

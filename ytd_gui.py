@@ -142,8 +142,13 @@ class DownloadApp(tk.Tk):
         url_row = ttk.Frame(root)
         url_row.pack(fill=tk.X, **pad)
         ttk.Label(url_row, text="YouTube URL").pack(anchor=tk.W)
-        entry = ttk.Entry(url_row, textvariable=self.url_var, font=("Segoe UI", 11))
-        entry.pack(fill=tk.X, pady=(4, 0))
+        url_inner = ttk.Frame(url_row)
+        url_inner.pack(fill=tk.X, pady=(4, 0))
+        entry = ttk.Entry(url_inner, textvariable=self.url_var, font=("Segoe UI", 11))
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(url_inner, text="📋", width=3, command=self._paste_url).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
         entry.focus_set()
 
         # Formátum kártya
@@ -259,6 +264,18 @@ class DownloadApp(tk.Tk):
         )
         if path:
             self.download_root.set(path)
+
+    def _paste_url(self) -> None:
+        try:
+            text = self.clipboard_get().strip()
+        except tk.TclError:
+            self.status_var.set("A vágólap üres vagy nem olvasható.")
+            return
+        if not text:
+            self.status_var.set("A vágólap üres.")
+            return
+        self.url_var.set(text)
+        self.status_var.set("Link beillesztve a vágólapról.")
 
     def _log(self, text: str) -> None:
         self.log.insert(tk.END, text + "\n")

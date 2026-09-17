@@ -21,7 +21,7 @@ import (
 
 const (
 	appTitle   = "YouTube DownloadR"
-	appVersion = "1.1.0"
+	appVersion = "1.2.0"
 )
 
 //go:embed static/*

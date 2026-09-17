@@ -39,12 +39,14 @@ h1 {
   margin-top: 18px;
 }
 
+.url-row,
 .dest-row {
   display: flex;
   gap: 8px;
   align-items: stretch;
 }
 
+.url-row input,
 .dest-row input {
   flex: 1;
   min-width: 0;
@@ -53,6 +55,20 @@ h1 {
 .dest-row button {
   flex: 0 0 auto;
   white-space: nowrap;
+}
+
+.icon-btn {
+  flex: 0 0 auto;
+  width: 42px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: #fff;
 }
 
 .field > span, .label {

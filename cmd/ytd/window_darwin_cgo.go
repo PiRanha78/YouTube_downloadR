@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin && cgo
 
 package main
 
@@ -11,9 +11,9 @@ var terminateUI func()
 func runNativeUI(url string) {
 	w := webview.New(false)
 	if w == nil {
-		// Tartalék, ha a WebKit binding nem jön létre
-		openBrowser(url)
-		select {}
+		openMacFallbackWindow(url)
+		waitForever()
+		return
 	}
 	terminateUI = func() {
 		w.Terminate()

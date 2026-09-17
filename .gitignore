@@ -25,3 +25,5 @@ tmp_mac_tools/
 cmd/ytd/bundled/tools.zip
 cmd/ytd/bundled/tools_windows.zip
 cmd/ytd/bundled/tools_darwin.zip
+cmd/ytd/bundled/tools_darwin_amd64.zip
+cmd/ytd/bundled/tools_darwin_arm64.zip

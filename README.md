@@ -7,44 +7,48 @@ Egységes GUI a `.bat` letöltők helyett (`yt-dlp` + `ffmpeg`).
 - **MP3** – bitráta: 128 / 256 / 320 kbps  
 - **MP4** – legmagasabb minőség  
 - **WAV** – veszteségmentes hang  
-- Mentési mappa tallózása  
+- Mentési mappa tallózása + URL vágólapról beillesztés  
 - Egyetlen videó: közvetlenül a választott mappába  
 - Playlist (`list=` a URL-ben): videónként külön alkönyvtár  
 - Letöltési sáv + **Mappa megnyitás**  
 - Beágyazott yt-dlp + ffmpeg (külön telepítés nélkül)
 
-## Letöltés
+## Letöltés (Release)
 
-### Windows
-`release/YouTube_DownloadR/YouTube_DownloadR.exe` (~93 MB)  
-Natív ablak (Edge WebView2).
+A kész binárisok a [GitHub Releases](https://github.com/PiRanha78/YouTube_downloadR/releases) oldalon:
 
-### macOS (Intel)
-`release/macOS/YouTube_DownloadR.app`  
-Natív ablak (WebKit). Első indításkor a segédprogramok ide kerülnek:  
-`~/Library/Application Support/YouTube_DownloadR/runtime/`  
-Alapértelmezett mentési gyökér: `~/Documents/YouTube_DownloadR/downloads`
+| Platform | Fájl |
+|----------|------|
+| Windows | `YouTube_DownloadR.exe` |
+| macOS Intel | `YouTube_DownloadR_macOS_Intel.zip` |
+| macOS Apple Silicon | `YouTube_DownloadR_macOS_AppleSilicon.zip` |
 
-> Gatekeeper: ha blokkolja, jobb klikk → Megnyitás, vagy:  
-> `xattr -dr com.apple.quarantine /útvonal/YouTube_DownloadR.app`
+> Gatekeeper: jobb klikk → Megnyitás, vagy:  
+> `xattr -dr com.apple.quarantine YouTube_DownloadR.app`
 
 ## Újrafordítás
 
 Kell: [Go](https://go.dev/dl/), macOS-en Xcode Command Line Tools.
 
 ```bash
-# Windows .exe (bármely OS-ről, ha megvan az app/ windows bináris)
-./build_exe.sh
+# Minden platform
+./build_all.sh
 
-# macOS Intel .app (csak Macen)
-./scripts/prepare_darwin_bundle.sh   # egyszer / frissítéskor
-./build_mac.sh
+# Egyenként
+./build_exe.sh          # Windows
+./build_mac.sh amd64    # Intel
+./build_mac.sh arm64    # Apple Silicon
+```
+
+Darwin tool bundle frissítés:
+
+```bash
+./scripts/prepare_darwin_bundle.sh all
 ```
 
 ## Fejlesztés
 
 ```bash
-# Python GUI (opcionális)
 python3 ytd_gui.py
 ```
 

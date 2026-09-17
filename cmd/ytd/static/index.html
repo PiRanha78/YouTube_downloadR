@@ -13,10 +13,17 @@
       <p class="sub">YouTube videó / hang letöltése · yt-dlp + ffmpeg</p>
     </header>
 
-    <label class="field">
+    <div class="field">
       <span>YouTube URL</span>
-      <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" />
-    </label>
+      <div class="url-row">
+        <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" />
+        <button id="pasteUrl" type="button" class="icon-btn" title="Beillesztés a vágólapról" aria-label="Beillesztés a vágólapról">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path fill="currentColor" d="M16 4h-1.5c-.3-1.2-1.4-2-2.5-2s-2.2.8-2.5 2H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-4-1c.6 0 1 .4 1 1s-.4 1-1 1-1-.4-1-1 .4-1 1-1zm4 17H8V6h1.2c.3.9 1.2 1.5 2.3 1.5s2-.6 2.3-1.5H16v14z"/>
+          </svg>
+        </button>
+      </div>
+    </div>
 
     <section class="card">
       <div class="label">Formátum</div>

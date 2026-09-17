@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
 
 const urlEl = $("url");
+const pasteUrlBtn = $("pasteUrl");
 const destEl = $("dest");
 const browseBtn = $("browse");
 const bitrateEl = $("bitrate");
@@ -43,6 +44,7 @@ function setBusy(busy) {
   downloadBtn.disabled = busy;
   updateBtn.disabled = busy;
   browseBtn.disabled = busy;
+  pasteUrlBtn.disabled = busy;
   cancelBtn.disabled = !busy;
   if (busy) {
     openFolderBtn.disabled = true;
@@ -123,6 +125,35 @@ async function shutdown(force) {
 
 document.querySelectorAll('input[name="format"]').forEach((el) => {
   el.addEventListener("change", syncBitrate);
+});
+
+pasteUrlBtn.addEventListener("click", async () => {
+  try {
+    let text = "";
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      text = await navigator.clipboard.readText();
+    } else {
+      // Tartalék régebbi környezethez
+      urlEl.focus();
+      const ok = document.execCommand("paste");
+      if (ok) {
+        setDlUI({ state: "Link beillesztve." });
+        return;
+      }
+      throw new Error("clipboard API unavailable");
+    }
+    text = (text || "").trim();
+    if (!text) {
+      setDlUI({ state: "A vágólap üres." });
+      return;
+    }
+    urlEl.value = text;
+    urlEl.focus();
+    setDlUI({ state: "Link beillesztve a vágólapról." });
+  } catch (err) {
+    setDlUI({ state: "Vágólap olvasás nem engedélyezett." });
+    appendLog("Vágólap hiba: " + err);
+  }
 });
 
 browseBtn.addEventListener("click", async () => {
