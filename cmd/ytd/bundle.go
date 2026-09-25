@@ -10,7 +10,7 @@ import (
 	"runtime"
 )
 
-const bundledStamp = "bundle-1.2.0"
+const bundledStamp = "bundle-1.3.1"
 
 func runtimeToolsDir() (string, error) {
 	var root string

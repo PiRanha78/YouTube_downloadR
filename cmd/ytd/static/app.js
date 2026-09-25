@@ -6,6 +6,12 @@ const destEl = $("dest");
 const browseBtn = $("browse");
 const bitrateEl = $("bitrate");
 const bitrateRow = $("bitrateRow");
+const resolutionEl = $("resolution");
+const resolutionRow = $("resolutionRow");
+const loginBtn = $("login");
+const loginDoneBtn = $("loginDone");
+const qualityHint = $("qualityHint");
+const coverEl = $("cover");
 const downloadBtn = $("download");
 const cancelBtn = $("cancel");
 const updateBtn = $("update");
@@ -21,22 +27,70 @@ const DEST_KEY = "ytd_dest_root";
 let isBusy = false;
 let quitting = false;
 let lastFolder = "";
+let probeTimer = 0;
+let probeSeq = 0;
+let probeCache = null;
+let heldEta = "";
+let heldPct = -1;
 
 function selectedFormat() {
   return document.querySelector('input[name="format"]:checked').value;
 }
 
-function setDlUI({ state, path, mode, enableOpen }) {
+const dlFill = $("dlFill");
+
+function setDlUI({ state, path, mode, enableOpen, percent }) {
   if (state != null) dlState.textContent = state;
   if (path != null) {
     dlPath.textContent = path || "—";
     dlPath.title = path || "";
   }
-  dlTrack.classList.remove("active", "done", "fail");
-  if (mode) dlTrack.classList.add(mode);
+  if (mode !== undefined) {
+    dlTrack.classList.remove("active", "done", "fail", "meter");
+    if (mode) dlTrack.classList.add(mode);
+    if (percent == null) dlFill.style.width = "";
+  }
+  if (percent != null) {
+    const n = Math.max(0, Math.min(100, percent));
+    dlTrack.classList.add("meter");
+    dlFill.style.width = n + "%";
+  }
   if (enableOpen != null) {
     openFolderBtn.disabled = !enableOpen;
   }
+}
+
+function applyDownloadLine(msg) {
+  const dest = msg.match(/^\[download\] Destination: (.+)$/);
+  if (dest) {
+    setDlUI({ path: dest[1].trim(), state: "Fájl írása…", mode: "active" });
+    return;
+  }
+  if (msg.startsWith("[download] Sleeping")) {
+    setDlUI({ state: "Várakozás a szerverre…", mode: "active" });
+    return;
+  }
+  if (msg.startsWith("[FixupM3u8]")) {
+    setDlUI({ state: "Összefűzés…", percent: 100, mode: "active" });
+    return;
+  }
+  const prog = msg.match(
+    /^\[download\]\s+([\d.]+)%\s+of\s+\S[\s\S]*?\bat\s+(\S+)(?:\s+ETA\s+(\S+))?(?:\s+\(frag\s+(\d+\/\d+)\))?/
+  );
+  if (!prog) return null;
+  const pct = parseFloat(prog[1]);
+  if (!Number.isFinite(pct)) return null;
+  const bits = [pct.toFixed(pct >= 10 ? 0 : 1).replace(/\.0$/, "") + "%", prog[2]];
+  if (prog[3] && prog[3] !== "Unknown") bits.push("ETA " + prog[3]);
+  if (prog[4]) bits.push(prog[4]);
+  setDlUI({ state: bits.join(" · "), percent: pct, mode: "active" });
+  return pct;
+}
+
+function progressBar(pct) {
+  const width = 28;
+  const filled = Math.round(Math.max(0, Math.min(100, pct)) / 100 * width);
+  return "[" + "#".repeat(filled) + "-".repeat(width - filled) + "]";
 }
 
 function setBusy(busy) {
@@ -46,21 +100,177 @@ function setBusy(busy) {
   browseBtn.disabled = busy;
   pasteUrlBtn.disabled = busy;
   cancelBtn.disabled = !busy;
+  syncAccountButtons();
   if (busy) {
+    heldEta = "";
+    heldPct = -1;
     openFolderBtn.disabled = true;
     setDlUI({ state: "Folyamatban…", mode: "active", enableOpen: false });
   }
 }
 
-function appendLog(line) {
-  logEl.textContent += line + "\n";
+const logLines = [];
+
+function renderLog() {
+  logEl.textContent = logLines.length ? logLines.join("\n") + "\n" : "";
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-function syncBitrate() {
-  const mp3 = selectedFormat() === "mp3";
+function appendLog(line) {
+  logLines.push(line);
+  renderLog();
+}
+
+function realEta(eta) {
+  return !!eta && eta !== "Unknown" && eta !== "NA" && eta !== "00:00" && eta !== "00:00:00";
+}
+
+function trackEta(pct, eta) {
+  if (Number.isFinite(pct) && heldPct >= 0 && pct + 8 < heldPct) {
+    heldEta = "";
+  }
+  if (Number.isFinite(pct)) heldPct = pct;
+  if (realEta(eta)) heldEta = eta;
+  return heldEta;
+}
+
+function isProgressBar(line) {
+  return /^\[[#\-]+\](?: ETA \S+)?$/.test(line);
+}
+
+function setProgressLog(bar) {
+  const last = logLines[logLines.length - 1];
+  if (last && isProgressBar(last)) {
+    logLines[logLines.length - 1] = bar;
+  } else {
+    logLines.push(bar);
+  }
+  renderLog();
+}
+
+function syncFormatOptions() {
+  const format = selectedFormat();
+  const mp3 = format === "mp3";
+  const mp4 = format === "mp4";
   bitrateRow.classList.toggle("disabled", !mp3);
   bitrateEl.disabled = !mp3;
+  resolutionRow.classList.toggle("disabled", !mp4);
+  resolutionEl.disabled = !mp4;
+  syncAccountButtons();
+  applyProbeCache();
+  scheduleProbe(true);
+}
+
+function maxListedHeight(heights) {
+  let best = 0;
+  for (const h of heights) if (h > best) best = h;
+  return best;
+}
+
+function qualityMessage(heights) {
+  const avail = maxListedHeight(heights);
+  if (!avail) return "A felbontást nem sikerült ellenőrizni.";
+  return `Elérhető: ${avail}p.`;
+}
+
+function setQualityHint(text) {
+  qualityHint.hidden = !text;
+  qualityHint.textContent = text || "";
+}
+
+let coverToken = 0;
+
+function setCover(url) {
+  const token = ++coverToken;
+  if (!url) {
+    coverEl.hidden = true;
+    coverEl.removeAttribute("src");
+    return;
+  }
+  coverEl.hidden = false;
+  coverEl.onerror = () => {
+    if (token !== coverToken) return;
+    coverEl.hidden = true;
+  };
+  const proxied = "/api/thumb?u=" + encodeURIComponent(url);
+  if (coverEl.getAttribute("src") !== proxied) coverEl.src = proxied;
+}
+
+function applyProbeCache() {
+  if (!probeCache || probeCache.url !== urlEl.value.trim()) {
+    setCover("");
+    return false;
+  }
+  setCover(probeCache.thumbnail || "");
+  if (selectedFormat() !== "mp4") {
+    setQualityHint("");
+    return true;
+  }
+  if (probeCache.playlist || probeCache.needLogin || !probeCache.heights) {
+    setQualityHint(probeCache.message || "");
+    return true;
+  }
+  setQualityHint(qualityMessage(probeCache.heights));
+  return true;
+}
+
+function scheduleProbe(immediate) {
+  clearTimeout(probeTimer);
+  const url = urlEl.value.trim();
+  if (!url) {
+    probeCache = null;
+    setQualityHint("");
+    setCover("");
+    return;
+  }
+  if (applyProbeCache() && (probeCache.heights || probeCache.playlist || probeCache.needLogin)) {
+    return;
+  }
+  const ready = /youtu\.be\/|youtube\.com\//i.test(url);
+  probeTimer = setTimeout(() => runProbe(), immediate || ready ? 0 : 600);
+}
+
+async function runProbe() {
+  if (isBusy) return;
+  const url = urlEl.value.trim();
+  if (!url) return;
+  const seq = ++probeSeq;
+  setQualityHint("Azonosítás…");
+  try {
+    const res = await fetch("/api/probe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url,
+        resolution: resolutionEl.value,
+        destRoot: destEl.value.trim(),
+      }),
+    });
+    const data = await res.json();
+    if (seq !== probeSeq || url !== urlEl.value.trim()) return;
+    probeCache = {
+      url,
+      heights: data.heights || null,
+      playlist: !!data.playlist,
+      needLogin: !!data.needLogin,
+      message: data.message || "",
+      thumbnail: data.thumbnail || "",
+    };
+    if (data.playlist && data.message) appendLog(data.message);
+    if (!data.ok && selectedFormat() === "mp4" && !data.message) {
+      setQualityHint("A felbontást nem sikerült ellenőrizni.");
+    }
+    applyProbeCache();
+  } catch (_) {
+    if (seq !== probeSeq) return;
+    setCover("");
+    if (selectedFormat() === "mp4") setQualityHint("A felbontást nem sikerült ellenőrizni.");
+  }
+}
+
+function syncAccountButtons() {
+  loginBtn.disabled = isBusy;
+  loginDoneBtn.disabled = isBusy;
 }
 
 function rememberDest(path) {
@@ -124,7 +334,60 @@ async function shutdown(force) {
 }
 
 document.querySelectorAll('input[name="format"]').forEach((el) => {
-  el.addEventListener("change", syncBitrate);
+  el.addEventListener("change", syncFormatOptions);
+});
+urlEl.addEventListener("input", () => {
+  probeCache = null;
+  setCover("");
+  scheduleProbe(false);
+});
+loginBtn.addEventListener("click", async () => {
+  loginBtn.disabled = true;
+  setDlUI({ state: "Belépő ablak nyílik…" });
+  try {
+    const res = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setDlUI({ state: data.error || "A belépő ablak nem nyílt meg.", mode: "fail" });
+      syncAccountButtons();
+      return;
+    }
+    loginDoneBtn.hidden = false;
+    setDlUI({ state: "Jelentkezz be a megnyílt ablakban, majd kattints a Belépés kész gombra." });
+  } catch (err) {
+    setDlUI({ state: "Belépés hiba: " + err, mode: "fail" });
+  }
+  syncAccountButtons();
+});
+
+loginDoneBtn.addEventListener("click", async () => {
+  loginDoneBtn.disabled = true;
+  setDlUI({ state: "Belépés mentése…" });
+  try {
+    const res = await fetch("/api/login/finish", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setDlUI({ state: data.error || "A belépést nem sikerült menteni.", mode: "fail" });
+      loginDoneBtn.disabled = false;
+      return;
+    }
+    loginDoneBtn.hidden = true;
+    if (data.videoUrl) {
+      urlEl.value = data.videoUrl;
+      setDlUI({ state: "Belépés mentve, a videó címe beírva.", mode: "done" });
+    } else {
+      setDlUI({ state: "YouTube belépés mentve.", mode: "done" });
+    }
+    probeCache = null;
+    scheduleProbe(true);
+  } catch (err) {
+    setDlUI({ state: "Belépés hiba: " + err, mode: "fail" });
+    loginDoneBtn.disabled = false;
+  }
 });
 
 pasteUrlBtn.addEventListener("click", async () => {
@@ -150,6 +413,8 @@ pasteUrlBtn.addEventListener("click", async () => {
     urlEl.value = text;
     urlEl.focus();
     setDlUI({ state: "Link beillesztve a vágólapról." });
+    probeCache = null;
+    scheduleProbe(true);
   } catch (err) {
     setDlUI({ state: "Vágólap olvasás nem engedélyezett." });
     appendLog("Vágólap hiba: " + err);
@@ -248,6 +513,7 @@ downloadBtn.addEventListener("click", async () => {
       url,
       format: selectedFormat(),
       bitrate: bitrateEl.value,
+      resolution: resolutionEl.value,
       destRoot: dest,
     }),
   });
@@ -274,16 +540,7 @@ updateBtn.addEventListener("click", async () => {
 });
 
 quitBtn.addEventListener("click", () => {
-  if (isBusy) {
-    const ok = confirm(
-      "Letöltés folyamatban.\n\nBiztosan kilépsz? A letöltés megszakad."
-    );
-    if (!ok) return;
-    shutdown(true);
-    return;
-  }
-  if (!confirm("Bezárod a YouTube DownloadR alkalmazást?")) return;
-  shutdown(false);
+  shutdown(true);
 });
 
 window.addEventListener("beforeunload", (ev) => {
@@ -327,6 +584,31 @@ es.onmessage = (ev) => {
   if (msg.startsWith("Mappa: ")) {
     setDlUI({ path: msg.slice("Mappa: ".length) });
   }
+  const barMsg = msg.split("\t");
+  if (isProgressBar(barMsg[0])) {
+    const pct = parseFloat(barMsg[2]);
+    const eta = trackEta(pct, (barMsg[0].match(/ ETA (\S+)$/) || [])[1]);
+    const bits = [];
+    if (Number.isFinite(pct)) bits.push(Math.round(pct) + "%");
+    if (barMsg[1]) bits.push(barMsg[1]);
+    if (eta) bits.push("ETA " + eta);
+    setDlUI({
+      state: bits.join(" · ") || "Letöltés…",
+      percent: Number.isFinite(pct) ? pct : undefined,
+      mode: "active",
+    });
+    setProgressLog(barMsg[0]);
+    return;
+  }
+  const pct = applyDownloadLine(msg);
+  if (pct != null) {
+    const eta = trackEta(pct, (msg.match(/\bETA\s+(\S+)/) || [])[1]);
+    let bar = progressBar(pct);
+    if (eta) bar += " ETA " + eta;
+    setProgressLog(bar);
+    return;
+  }
+  if (!msg.trim()) return;
   if (msg.includes("yt-dlp frissítés kész") || msg.includes("yt-dlp frissítés hibakód")) {
     setBusy(false);
     setDlUI({
@@ -338,7 +620,7 @@ es.onmessage = (ev) => {
   appendLog(msg);
 };
 
-syncBitrate();
+syncFormatOptions();
 refreshStatus().catch((err) => {
   setDlUI({ state: "Státusz hiba: " + err, mode: "fail" });
 });

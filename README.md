@@ -5,7 +5,7 @@ Egységes GUI a `.bat` letöltők helyett (`yt-dlp` + `ffmpeg`).
 ## Funkciók
 
 - **MP3** – bitráta: 128 / 256 / 320 kbps  
-- **MP4** – legmagasabb minőség  
+- **MP4** – 720p / 1080p / 2K (1440p) / 4K (2160p)  
 - **WAV** – veszteségmentes hang  
 - Mentési mappa tallózása + URL vágólapról beillesztés  
 - Egyetlen videó: közvetlenül a választott mappába  

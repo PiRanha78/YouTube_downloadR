@@ -2,26 +2,35 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"io/fs"
+	"math"
 	"net"
 	"net/http"
 	netURL "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
+
+	id3v2 "github.com/bogem/id3v2/v2"
+	xdraw "golang.org/x/image/draw"
 )
 
 const (
 	appTitle   = "YouTube DownloadR"
-	appVersion = "1.2.0"
+	appVersion = "1.3.1"
 )
 
 //go:embed static/*
@@ -31,6 +40,9 @@ type server struct {
 	base         string
 	ytDlp        string
 	ffmpeg       string
+	ffprobe      string
+	probeMu      sync.Mutex
+	cachedProbe  *formatProbe
 	mu           sync.Mutex
 	busy         bool
 	cancel       context.CancelFunc
@@ -54,10 +66,12 @@ type statusResp struct {
 }
 
 type downloadReq struct {
-	URL      string `json:"url"`
-	Format   string `json:"format"`
-	Bitrate  string `json:"bitrate"`
-	DestRoot string `json:"destRoot"`
+	URL            string `json:"url"`
+	Format         string `json:"format"`
+	Bitrate        string `json:"bitrate"`
+	Resolution     string `json:"resolution"`
+	CookiesBrowser string `json:"cookiesBrowser"`
+	DestRoot       string `json:"destRoot"`
 }
 
 func main() {
@@ -83,6 +97,7 @@ func main() {
 		base:    base,
 		ytDlp:   ytDlp,
 		ffmpeg:  ffmpeg,
+		ffprobe: ffprobeBeside(ffmpeg),
 		logCh:   make(chan string, 256),
 		clients: make(map[chan string]struct{}),
 	}
@@ -99,6 +114,10 @@ func main() {
 	mux.HandleFunc("/api/pick-folder", s.handlePickFolder)
 	mux.HandleFunc("/api/open-folder", s.handleOpenFolder)
 	mux.HandleFunc("/api/shutdown", s.handleShutdown)
+	mux.HandleFunc("/api/login", s.handleLogin)
+	mux.HandleFunc("/api/login/finish", s.handleLoginFinish)
+	mux.HandleFunc("/api/probe", s.handleProbe)
+	mux.HandleFunc("/api/thumb", s.handleThumb)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -334,6 +353,8 @@ func (s *server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	req.URL = strings.TrimSpace(req.URL)
 	req.Format = strings.ToLower(strings.TrimSpace(req.Format))
 	req.Bitrate = strings.TrimSpace(req.Bitrate)
+	req.Resolution = strings.TrimSpace(req.Resolution)
+	req.CookiesBrowser = strings.ToLower(strings.TrimSpace(req.CookiesBrowser))
 	if req.URL == "" {
 		http.Error(w, "missing url", http.StatusBadRequest)
 		return
@@ -344,6 +365,12 @@ func (s *server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Format == "mp3" && req.Bitrate != "128" && req.Bitrate != "256" && req.Bitrate != "320" {
 		req.Bitrate = "320"
+	}
+	if req.Format == "mp4" && !validMP4Height(req.Resolution) {
+		req.Resolution = "1080"
+	}
+	if !validCookiesBrowser(req.CookiesBrowser) || req.CookiesBrowser == "" {
+		req.CookiesBrowser = savedAuthBrowser()
 	}
 	if s.ytDlp == "" || s.ffmpeg == "" {
 		http.Error(w, "missing tools", http.StatusBadRequest)
@@ -379,19 +406,28 @@ func (s *server) handleDownload(w http.ResponseWriter, r *http.Request) {
 			s.cancel = nil
 			s.mu.Unlock()
 		}()
-		s.doDownload(ctx, req.URL, destRoot, req.Format, req.Bitrate)
+		s.doDownload(ctx, req.URL, destRoot, req.Format, req.Bitrate, req.Resolution, req.CookiesBrowser)
 	}()
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
-func (s *server) doDownload(ctx context.Context, url, destRoot, format, bitrate string) {
+func (s *server) doDownload(ctx context.Context, url, destRoot, format, bitrate, resolution, cookiesBrowser string) {
 	s.emit(fmt.Sprintf("——— %s ———", time.Now().Format("2006-01-02 15:04:05")))
 	s.emit("URL: " + url)
 	extra := ""
 	if format == "mp3" {
 		extra = " @ " + bitrate + " kbps"
+	} else if format == "mp4" {
+		extra = " @ " + mp4HeightLabel(resolution)
 	}
 	s.emit("Formátum: " + strings.ToUpper(format) + extra)
+	cookiesPath := cookiesFilePath(cookiesBrowser)
+	if cookiesBrowser == "" || !fileExists(cookiesPath) {
+		s.emit("Nincs mentett YouTube belépés. Kattints a Bejelentkezés gombra, jelentkezz be, majd a Belépés kész gombra.")
+		s.emit("EVENT:FAIL")
+		return
+	}
+	s.emit("YouTube fiók: mentett sütik (" + cookiesBrowser + ")")
 
 	playlist := isPlaylistURL(url)
 	outDir := destRoot
@@ -407,8 +443,24 @@ func (s *server) doDownload(ctx context.Context, url, destRoot, format, bitrate 
 	}
 	s.emit("Mappa: " + outDir)
 
-	args := s.buildArgs(url, outDir, format, bitrate, playlist)
-	s.emit("Parancs: " + s.ytDlp + " " + strings.Join(args, " "))
+	overwrite := false
+	if format == "mp4" && !playlist {
+		probe, err := s.videoFormats(ctx, url, outDir, cookiesPath)
+		if err == nil {
+			available := bestHeightAtMost(probe.Heights, resolution)
+			have := s.fileVideoHeight(withResolution(probe.FilePath, available))
+			if have > 0 && available > 0 && have >= available {
+				s.emit(fmt.Sprintf("Már megvan (%dp).", have))
+				s.emit("EVENT:OK:" + outDir)
+				return
+			}
+			if have > 0 && available > have {
+				s.emit(fmt.Sprintf("A mentett %dp helyére %dp kerül.", have, available))
+				overwrite = true
+			}
+		}
+	}
+	args := s.buildArgs(url, outDir, format, bitrate, resolution, cookiesPath, playlist, overwrite)
 	code := s.runCmd(ctx, s.ytDlp, args...)
 	if code == 0 {
 		s.emit("Sikeres letöltés → " + outDir)
@@ -430,7 +482,55 @@ func isPlaylistURL(raw string) bool {
 	return strings.TrimSpace(u.Query().Get("list")) != ""
 }
 
-func (s *server) buildArgs(url, outDir, format, bitrate string, playlist bool) []string {
+func validCookiesBrowser(name string) bool {
+	switch name {
+	case "", "chrome", "brave":
+		return true
+	default:
+		return false
+	}
+}
+
+func validMP4Height(h string) bool {
+	switch h {
+	case "720", "1080", "1440", "2160":
+		return true
+	default:
+		return false
+	}
+}
+
+func mp4HeightLabel(h string) string {
+	switch h {
+	case "720":
+		return "720p"
+	case "1440":
+		return "2K (1440p)"
+	case "2160":
+		return "4K (2160p)"
+	default:
+		return "1080p"
+	}
+}
+
+func withResolution(path string, height int) string {
+	if path == "" || height <= 0 {
+		return path
+	}
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	return fmt.Sprintf("%s [%dp]%s", base, height, ext)
+}
+
+func ffprobeBeside(ffmpeg string) string {
+	name := "ffprobe"
+	if runtime.GOOS == "windows" {
+		name = "ffprobe.exe"
+	}
+	return filepath.Join(filepath.Dir(ffmpeg), name)
+}
+
+func (s *server) buildArgs(url, outDir, format, bitrate, resolution, cookiesPath string, playlist, overwrite bool) []string {
 	var outTpl string
 	if playlist {
 		// Playlist: playlist mappa / videónként saját alkönyvtár
@@ -440,12 +540,23 @@ func (s *server) buildArgs(url, outDir, format, bitrate string, playlist bool) [
 			"%(title)s [%(id)s]",
 			"%(title)s.%(ext)s",
 		)
+	} else if format == "mp4" {
+		outTpl = filepath.Join(outDir, "%(title)s [%(height)sp].%(ext)s")
 	} else {
 		outTpl = filepath.Join(outDir, "%(title)s.%(ext)s")
+	}
+	if playlist && format == "mp4" {
+		outTpl = filepath.Join(
+			outDir,
+			"%(playlist)s",
+			"%(title)s [%(id)s]",
+			"%(title)s [%(height)sp].%(ext)s",
+		)
 	}
 	common := []string{
 		"--ffmpeg-location", s.ffmpeg,
 		"--force-ipv4",
+		"--newline",
 		"-o", outTpl,
 	}
 	if playlist {
@@ -453,10 +564,24 @@ func (s *server) buildArgs(url, outDir, format, bitrate string, playlist bool) [
 	} else {
 		common = append([]string{"--no-playlist"}, common...)
 	}
+	if cookiesPath != "" {
+		common = append(common, "--cookies", cookiesPath)
+	}
+	if overwrite {
+		common = append(common, "--force-overwrites")
+	}
+	common = append(common, jsRuntimeArgs()...)
+	// Korhatáros videón a https-sávok gyakran hiányoznak, a web_safari HLS viszont megadja az 1080-at.
+	common = append(common, "--extractor-args", "youtube:player_client=default,web_safari")
 	switch format {
 	case "mp4":
+		h := resolution
+		if !validMP4Height(h) {
+			h = "1080"
+		}
+		selector := fmt.Sprintf("bestvideo*[height<=%s]+bestaudio/best[height<=%s]/best", h, h)
 		return append(common,
-			"-f", "bestvideo*+bestaudio/best",
+			"-f", selector,
 			"--merge-output-format", "mp4",
 			url,
 		)
@@ -481,7 +606,20 @@ func (s *server) buildArgs(url, outDir, format, bitrate string, playlist bool) [
 			"--audio-quality", br+"K",
 			"--concurrent-fragments", "10",
 			"--http-chunk-size", "10M",
-			"--postprocessor-args", fmt.Sprintf("ffmpeg:-c:a libmp3lame -b:a %sk -threads 4", br),
+			"--embed-metadata",
+			"--embed-thumbnail",
+			"--convert-thumbnails", "jpg",
+			"--parse-metadata", "%(artist,creator,uploader)s:%(meta_artist)s",
+			"--parse-metadata", "%(album,playlist_title,channel,uploader)s:%(meta_album)s",
+			"--parse-metadata", "%(title)s:%(meta_title)s",
+			"--parse-metadata", "%(upload_date>%Y)s:%(meta_date)s",
+			"--parse-metadata", ":(?P<meta_description>)",
+			"--parse-metadata", ":(?P<meta_comment>)",
+			"--postprocessor-args", fmt.Sprintf("ExtractAudio+ffmpeg:-c:a libmp3lame -b:a %sk -threads 4", br),
+			"--postprocessor-args", "Metadata+ffmpeg:-id3v2_version 3 -write_id3v1 0",
+			"--postprocessor-args", "EmbedThumbnail+ffmpeg:-id3v2_version 3",
+			"--write-info-json",
+			"--print", "after_move:MP3\t%(filepath)s",
 			url,
 		)
 	}
@@ -489,6 +627,7 @@ func (s *server) buildArgs(url, outDir, format, bitrate string, playlist bool) [
 
 func (s *server) runCmd(ctx context.Context, name string, args ...string) int {
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
 	hideWindow(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -502,16 +641,372 @@ func (s *server) runCmd(ctx context.Context, name string, args ...string) int {
 	}
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	sc.Split(splitCRLF)
+	var lastProgress string
+	var covers []string
 	for sc.Scan() {
-		s.emit(sc.Text())
+		line := strings.TrimSpace(decodeOutput(sc.Bytes()))
+		if line == "" {
+			continue
+		}
+		if i := strings.Index(line, "MP3\t"); i >= 0 {
+			// A fájl yt-dlp kilépéséig zárolt maradhat; a cserét utána végezzük.
+			path := strings.Trim(strings.TrimSpace(line[i+len("MP3\t"):]), `"`)
+			if path != "" && path != "NA" {
+				covers = append(covers, path)
+			}
+			continue
+		}
+		if path := embedThumbPath(line); path != "" {
+			covers = append(covers, path)
+			continue
+		}
+		short, progress := shortenYtLine(line)
+		if progress {
+			if short == "" || short == lastProgress {
+				continue
+			}
+			lastProgress = short
+		}
+		if short == "" {
+			continue
+		}
+		s.emit(short)
 	}
-	if err := cmd.Wait(); err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+	waitErr := cmd.Wait()
+	seen := map[string]bool{}
+	for _, path := range covers {
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		s.squareEmbeddedCover(path)
+	}
+	if waitErr != nil {
+		if ee, ok := waitErr.(*exec.ExitError); ok {
 			return ee.ExitCode()
 		}
 		return 1
 	}
 	return 0
+}
+
+func decodeOutput(b []byte) string {
+	if utf8.Valid(b) {
+		return string(b)
+	}
+	var sb strings.Builder
+	sb.Grow(len(b))
+	for _, c := range b {
+		if c < 0x80 {
+			sb.WriteByte(c)
+			continue
+		}
+		sb.WriteRune(cp1250[c-0x80])
+	}
+	return sb.String()
+}
+
+// Windows-1250, a magyar rendszerkódlap. Az á 0xE1, ezért a naplóban nem �.
+var cp1250 = [128]rune{
+	0x20AC, 0x0081, 0x201A, 0x0083, 0x201E, 0x2026, 0x2020, 0x2021,
+	0x0089, 0x2030, 0x0160, 0x2039, 0x015A, 0x0164, 0x017D, 0x0179,
+	0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+	0x0099, 0x2122, 0x0161, 0x203A, 0x015B, 0x0165, 0x017E, 0x017A,
+	0x00A0, 0x02C7, 0x02D8, 0x0141, 0x00A4, 0x0104, 0x00A6, 0x00A7,
+	0x00A8, 0x00A9, 0x015E, 0x00AB, 0x00AC, 0x00AD, 0x00AE, 0x017B,
+	0x00B0, 0x00B1, 0x02DB, 0x0142, 0x00B4, 0x00B5, 0x00B6, 0x00B7,
+	0x00B8, 0x0105, 0x015F, 0x00BB, 0x013D, 0x02DD, 0x013E, 0x017C,
+	0x0154, 0x00C1, 0x00C2, 0x0102, 0x00C4, 0x0139, 0x0106, 0x00C7,
+	0x010C, 0x00C9, 0x0118, 0x00CB, 0x011A, 0x00CD, 0x00CE, 0x010E,
+	0x0110, 0x0143, 0x0147, 0x00D3, 0x00D4, 0x0150, 0x00D6, 0x00D7,
+	0x0158, 0x016E, 0x00DA, 0x0170, 0x00DC, 0x00DD, 0x0162, 0x00DF,
+	0x0155, 0x00E1, 0x00E2, 0x0103, 0x00E4, 0x013A, 0x0107, 0x00E7,
+	0x010D, 0x00E9, 0x0119, 0x00EB, 0x011B, 0x00ED, 0x00EE, 0x010F,
+	0x0111, 0x0144, 0x0148, 0x00F3, 0x00F4, 0x0151, 0x00F6, 0x00F7,
+	0x0159, 0x016F, 0x00FA, 0x0171, 0x00FC, 0x00FD, 0x0163, 0x02D9,
+}
+
+func splitCRLF(data []byte, atEOF bool) (int, []byte, error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	for i, b := range data {
+		if b == '\n' || b == '\r' {
+			return i + 1, data[:i], nil
+		}
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+var (
+	dlPercentRe = regexp.MustCompile(`^\[download\]\s+([\d.]+)%`)
+	dlSpeedRe   = regexp.MustCompile(`\bat\s+(\S+)`)
+	dlETARe     = regexp.MustCompile(`\bETA\s+(\S+)`)
+)
+
+func shortenYtLine(line string) (string, bool) {
+	if m := dlPercentRe.FindStringSubmatch(line); m != nil {
+		pct := 0.0
+		fmt.Sscanf(m[1], "%f", &pct)
+		bar := progressBarLine(pct)
+		if eta := dlETARe.FindStringSubmatch(line); eta != nil && realETA(eta[1]) {
+			bar += " ETA " + eta[1]
+		}
+		speed := ""
+		if sp := dlSpeedRe.FindStringSubmatch(line); sp != nil {
+			speed = sp[1]
+		}
+		return bar + "\t" + speed + "\t" + m[1], true
+	}
+	if strings.Contains(line, "PO Token") || strings.Contains(line, "po_token") {
+		return "Egyes sávok kimaradnak.", false
+	}
+	if strings.Contains(line, "Total fragments") || strings.Contains(line, "Downloading m3u8") {
+		return "", false
+	}
+	if rest, ok := strings.CutPrefix(line, "[download] Destination: "); ok {
+		return "Fájl: " + filepath.Base(strings.Trim(rest, `"`)), false
+	}
+	if strings.HasPrefix(line, "[download] Sleeping") {
+		return "Várakozás…", false
+	}
+	if strings.HasPrefix(line, "[FixupM3u8]") {
+		return "Összefűzés…", false
+	}
+	return line, false
+}
+
+func squareSide(height int) int {
+	switch {
+	case height <= 0:
+		return 0
+	case height >= 1080:
+		return 1000
+	case height >= 720:
+		return 500
+	default:
+		return height
+	}
+}
+
+func (s *server) squareEmbeddedCover(mp3Path string) {
+	infoPath := strings.TrimSuffix(mp3Path, filepath.Ext(mp3Path)) + ".info.json"
+	if !fileExists(infoPath) {
+		alt := mp3Path + ".info.json"
+		if fileExists(alt) {
+			infoPath = alt
+		}
+	}
+	height := 0
+	if fileExists(infoPath) {
+		height = videoHeightFromInfo(infoPath)
+	}
+	side := squareSide(height)
+	if side == 0 {
+		s.emit("Borító: a videó magassága nem olvasható.")
+		return
+	}
+	if err := replaceMP3Cover(s.ffmpeg, mp3Path, side); err != nil {
+		msg := strings.TrimSpace(err.Error())
+		if i := strings.IndexByte(msg, '\n'); i >= 0 {
+			msg = strings.TrimSpace(msg[:i])
+		}
+		if msg == "" {
+			msg = "ismeretlen hiba"
+		}
+		s.emit("Borító csere sikertelen: " + msg)
+		return
+	}
+	if fileExists(infoPath) {
+		_ = os.Remove(infoPath)
+	}
+	s.emit(fmt.Sprintf("Borító: %d×%d.", side, side))
+}
+
+func embedThumbPath(line string) string {
+	const key = "Adding thumbnail to "
+	i := strings.Index(line, key)
+	if i < 0 {
+		return ""
+	}
+	path := strings.Trim(strings.TrimSpace(line[i+len(key):]), `"`)
+	if path == "" || path == "NA" || !strings.EqualFold(filepath.Ext(path), ".mp3") {
+		return ""
+	}
+	return path
+}
+
+func videoHeightFromInfo(path string) int {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	var info struct {
+		Height  float64 `json:"height"`
+		Formats []struct {
+			Height int    `json:"height"`
+			VCodec string `json:"vcodec"`
+		} `json:"formats"`
+	}
+	if json.Unmarshal(raw, &info) != nil {
+		return 0
+	}
+	best := int(info.Height)
+	for _, f := range info.Formats {
+		if f.Height > best && f.VCodec != "" && f.VCodec != "none" && !strings.Contains(strings.ToLower(f.VCodec), "images") {
+			best = f.Height
+		}
+	}
+	return best
+}
+
+func cropSquareJPEG(src []byte, side int) ([]byte, error) {
+	img, err := jpeg.Decode(bytes.NewReader(src))
+	if err != nil {
+		return nil, err
+	}
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w < 1 || h < 1 {
+		return nil, fmt.Errorf("üres borítókép")
+	}
+	n := w
+	if h < n {
+		n = h
+	}
+	srcRect := image.Rect(b.Min.X+(w-n)/2, b.Min.Y+(h-n)/2, 0, 0)
+	srcRect.Max = image.Point{srcRect.Min.X + n, srcRect.Min.Y + n}
+	cropped := image.NewRGBA(image.Rect(0, 0, n, n))
+	xdraw.Draw(cropped, cropped.Bounds(), img, srcRect.Min, xdraw.Src)
+	dst := image.NewRGBA(image.Rect(0, 0, side, side))
+	xdraw.CatmullRom.Scale(dst, dst.Bounds(), cropped, cropped.Bounds(), xdraw.Over, nil)
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, dst, &jpeg.Options{Quality: 90}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func replaceMP3Cover(ffmpeg, mp3Path string, side int) error {
+	jpg := mp3Path + ".cover.jpg"
+	sq := mp3Path + ".cover.sq.jpg"
+	tmp := mp3Path + ".cover.mp3"
+	_ = os.Remove(jpg)
+	_ = os.Remove(sq)
+	_ = os.Remove(tmp)
+	defer os.Remove(jpg)
+	defer os.Remove(sq)
+	extract := exec.Command(ffmpeg,
+		"-y", "-hide_banner", "-loglevel", "error",
+		"-i", mp3Path,
+		"-map", "0:v:0",
+		"-frames:v", "1",
+		"-q:v", "2",
+		jpg,
+	)
+	hideWindow(extract)
+	if out, err := extract.CombinedOutput(); err != nil {
+		if len(out) > 0 {
+			return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+		}
+		return err
+	}
+	raw, err := os.ReadFile(jpg)
+	if err != nil {
+		return err
+	}
+	squared, err := cropSquareJPEG(raw, side)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(sq, squared, 0o644); err != nil {
+		return err
+	}
+	// Csak a hang megy át. A régi képsáv és a régi borítókeret nem.
+	cmd := exec.Command(ffmpeg,
+		"-y", "-hide_banner", "-loglevel", "error",
+		"-i", mp3Path,
+		"-map", "0:a:0",
+		"-c:a", "copy",
+		"-map_metadata", "0",
+		"-id3v2_version", "3",
+		"-write_id3v1", "0",
+		tmp,
+	)
+	hideWindow(cmd)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		_ = os.Remove(tmp)
+		if len(out) > 0 {
+			return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+		}
+		return err
+	}
+	if err := writeSquareAPIC(tmp, squared); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	bak := mp3Path + ".bak"
+	var renameErr error
+	for attempt := 0; attempt < 8; attempt++ {
+		_ = os.Remove(bak)
+		renameErr = os.Rename(mp3Path, bak)
+		if renameErr == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if renameErr != nil {
+		_ = os.Remove(tmp)
+		return renameErr
+	}
+	if err := os.Rename(tmp, mp3Path); err != nil {
+		_ = os.Rename(bak, mp3Path)
+		_ = os.Remove(tmp)
+		return err
+	}
+	return os.Remove(bak)
+}
+
+func writeSquareAPIC(path string, jpeg []byte) error {
+	tag, err := id3v2.Open(path, id3v2.Options{Parse: true})
+	if err != nil {
+		return err
+	}
+	defer tag.Close()
+	tag.SetVersion(3)
+	tag.DeleteFrames(tag.CommonID("Attached picture"))
+	tag.AddAttachedPicture(id3v2.PictureFrame{
+		Encoding:    id3v2.EncodingISO,
+		MimeType:    "image/jpeg",
+		PictureType: id3v2.PTFrontCover,
+		Description: "Cover",
+		Picture:     jpeg,
+	})
+	return tag.Save()
+}
+
+func realETA(eta string) bool {
+	if eta == "" || eta == "Unknown" || eta == "NA" {
+		return false
+	}
+	// A 00:00 nem hátralévő idő, hanem üres minta két sáv vagy töredék között.
+	return eta != "00:00" && eta != "00:00:00"
+}
+
+func progressBarLine(pct float64) string {
+	const width = 28
+	filled := int(math.Round(pct / 100 * float64(width)))
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > width {
+		filled = width
+	}
+	return "[" + strings.Repeat("#", filled) + strings.Repeat("-", width-filled) + "]"
 }
 
 func (s *server) handleLogs(w http.ResponseWriter, r *http.Request) {

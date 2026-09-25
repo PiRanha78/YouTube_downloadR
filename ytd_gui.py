@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 YouTube DownloadR – egységes GUI a yt-dlp + ffmpeg alapú letöltéshez.
-Formátumok: MP3 (128/256/320 kbps), MP4 (legmagasabb), WAV.
+Formátumok: MP3 (128/256/320 kbps), MP4 (720p / 1080p / 2K / 4K), WAV.
 Minden mentés külön könyvtárba kerül.
 """
 
@@ -21,6 +21,26 @@ from urllib.parse import parse_qs, urlparse
 
 APP_TITLE = "YouTube DownloadR"
 APP_VERSION = "1.0.0"
+
+
+def js_runtime_args() -> list[str]:
+    candidates = [
+        Path(os.environ.get("ProgramFiles", "")) / "nodejs" / "node.exe",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "nodejs" / "node.exe",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return ["--js-runtimes", f"node:{path}", "--remote-components", "ejs:github"]
+    return []
+
+
+def cookies_file_path(browser: str) -> Path:
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        root = Path(local)
+    else:
+        root = Path.home() / ".local" / "share"
+    return root / "YouTube_DownloadR" / "auth" / browser / "cookies.txt"
 
 
 def app_base_dir() -> Path:
@@ -87,6 +107,8 @@ class DownloadApp(tk.Tk):
         self.download_root = tk.StringVar(value=str(self.base / "downloads"))
         self.format_var = tk.StringVar(value="mp3")
         self.bitrate_var = tk.StringVar(value="320")
+        self.resolution_var = tk.StringVar(value="1080p")
+        self.cookies_var = tk.StringVar(value="Chrome")
         self.url_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Készen áll.")
         self._busy = False
@@ -167,7 +189,7 @@ class DownloadApp(tk.Tk):
             command=self._on_format_change, style="TRadiobutton",
         ).pack(side=tk.LEFT, padx=(0, 16))
         ttk.Radiobutton(
-            fmt_frame, text="MP4 (legmagasabb minőség)", variable=self.format_var, value="mp4",
+            fmt_frame, text="MP4", variable=self.format_var, value="mp4",
             command=self._on_format_change, style="TRadiobutton",
         ).pack(side=tk.LEFT, padx=(0, 16))
         ttk.Radiobutton(
@@ -186,6 +208,39 @@ class DownloadApp(tk.Tk):
         )
         self.bitrate_combo.grid(row=2, column=1, sticky=tk.W, padx=(12, 0))
         self.bitrate_combo.current(2)
+
+        self.resolution_label = ttk.Label(inner, text="MP4 felbontás", style="Card.TLabel")
+        self.resolution_label.grid(row=3, column=0, sticky=tk.W, pady=(8, 0))
+        self.resolution_combo = ttk.Combobox(
+            inner,
+            textvariable=self.resolution_var,
+            values=("720p", "1080p", "2K (1440p)", "4K (2160p)"),
+            state="disabled",
+            width=16,
+        )
+        self.resolution_combo.grid(row=3, column=1, sticky=tk.W, padx=(12, 0), pady=(8, 0))
+        self._resolution_heights = {
+            "720p": "720",
+            "1080p": "1080",
+            "2K (1440p)": "1440",
+            "4K (2160p)": "2160",
+        }
+
+        self.cookies_label = ttk.Label(inner, text="YouTube fiók", style="Card.TLabel")
+        self.cookies_label.grid(row=4, column=0, sticky=tk.W, pady=(8, 0))
+        self.cookies_combo = ttk.Combobox(
+            inner,
+            textvariable=self.cookies_var,
+            values=("Chrome", "Brave", "Nincs"),
+            state="readonly",
+            width=16,
+        )
+        self.cookies_combo.grid(row=4, column=1, sticky=tk.W, padx=(12, 0), pady=(8, 0))
+        self._cookies_browsers = {
+            "Chrome": "chrome",
+            "Brave": "brave",
+            "Nincs": "",
+        }
 
         # Mentési mappa
         dest_row = ttk.Frame(root)
@@ -252,10 +307,13 @@ class DownloadApp(tk.Tk):
         self._on_format_change()
 
     def _on_format_change(self) -> None:
-        is_mp3 = self.format_var.get() == "mp3"
-        state = "readonly" if is_mp3 else "disabled"
-        self.bitrate_combo.configure(state=state)
+        fmt = self.format_var.get()
+        is_mp3 = fmt == "mp3"
+        is_mp4 = fmt == "mp4"
+        self.bitrate_combo.configure(state="readonly" if is_mp3 else "disabled")
         self.bitrate_label.configure(foreground="#e8eaed" if is_mp3 else "#5f6368")
+        self.resolution_combo.configure(state="readonly" if is_mp4 else "disabled")
+        self.resolution_label.configure(foreground="#e8eaed" if is_mp4 else "#5f6368")
 
     def _browse_dest(self) -> None:
         path = filedialog.askdirectory(
@@ -335,15 +393,32 @@ class DownloadApp(tk.Tk):
 
         fmt = self.format_var.get()
         bitrate = self.bitrate_var.get()
+        resolution = self.resolution_var.get()
+        extra = ""
+        if fmt == "mp3":
+            extra = f" @ {bitrate} kbps"
+        elif fmt == "mp4":
+            extra = " @ " + (resolution if resolution in self._resolution_heights else "1080p")
+        cookies = self._cookies_browsers.get(self.cookies_var.get(), "")
+        if cookies and not cookies_file_path(cookies).is_file():
+            messagebox.showwarning(
+                "Nincs YouTube belépés",
+                "Nincs mentett belépés ehhez a böngészőhöz.\n\n"
+                "A Go alkalmazásban kattints a Bejelentkezés gombra, "
+                "jelentkezz be, majd a Belépés kész gombra.",
+            )
+            return
         self._set_busy(True)
         self.status_var.set("Letöltés folyamatban…")
         self._log(f"——— {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ———")
         self._log(f"URL: {url}")
-        self._log(f"Formátum: {fmt.upper()}" + (f" @ {bitrate} kbps" if fmt == "mp3" else ""))
+        self._log(f"Formátum: {fmt.upper()}{extra}")
+        if cookies:
+            self._log(f"YouTube fiók: mentett sütik ({cookies})")
 
         threading.Thread(
             target=self._download_worker,
-            args=(url, dest_root, fmt, bitrate),
+            args=(url, dest_root, fmt, bitrate, resolution, cookies),
             daemon=True,
         ).start()
 
@@ -378,7 +453,14 @@ class DownloadApp(tk.Tk):
             self._log(f"yt-dlp frissítés hibakód: {code}")
 
     def _build_yt_cmd(
-        self, url: str, out_dir: Path, fmt: str, bitrate: str, playlist: bool
+        self,
+        url: str,
+        out_dir: Path,
+        fmt: str,
+        bitrate: str,
+        resolution: str,
+        cookies_browser: str,
+        playlist: bool,
     ) -> list[str]:
         assert self.yt_dlp is not None and self.ffmpeg is not None
         ffmpeg_loc = str(self.ffmpeg)
@@ -397,11 +479,21 @@ class DownloadApp(tk.Tk):
             "-o",
             out_tpl,
         ]
+        if cookies_browser in {"chrome", "brave"}:
+            cookie_file = cookies_file_path(cookies_browser)
+            if cookie_file.is_file():
+                common += ["--cookies", str(cookie_file)]
+        common += js_runtime_args()
+        common += ["--extractor-args", "youtube:player_client=default,web_safari"]
 
         if fmt == "mp4":
+            height = self._resolution_heights.get(resolution, "1080")
+            selector = (
+                f"bestvideo*[height<={height}]+bestaudio/best[height<={height}]/best"
+            )
             return common + [
                 "-f",
-                "bestvideo*+bestaudio/best",
+                selector,
                 "--merge-output-format",
                 "mp4",
                 url,
@@ -445,7 +537,7 @@ class DownloadApp(tk.Tk):
         ]
 
     def _download_worker(
-        self, url: str, dest_root: Path, fmt: str, bitrate: str
+        self, url: str, dest_root: Path, fmt: str, bitrate: str, resolution: str, cookies_browser: str
     ) -> None:
         playlist = is_playlist_url(url)
         out_dir = dest_root
@@ -461,7 +553,7 @@ class DownloadApp(tk.Tk):
             self.after(0, lambda: self._log("Egyetlen videó – mentés közvetlenül a kiválasztott mappába."))
 
         self.after(0, lambda: self._log(f"Mappa: {out_dir}"))
-        cmd = self._build_yt_cmd(url, out_dir, fmt, bitrate, playlist)
+        cmd = self._build_yt_cmd(url, out_dir, fmt, bitrate, resolution, cookies_browser, playlist)
         self.after(0, lambda: self._log("Parancs: " + " ".join(cmd)))
         code = self._run_cmd(cmd)
         if code == 0:

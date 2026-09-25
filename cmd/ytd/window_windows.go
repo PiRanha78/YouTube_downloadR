@@ -26,7 +26,9 @@ func runNativeUI(url string) {
 		return
 	}
 	terminateUI = func() {
-		w.Terminate()
+		// Destroy a WM_CLOSE-t az ablak szálára küldi. A Terminate()
+		// PostQuitMessage csak a hívó szálnak szól, HTTP-kezelőből nem áll le az ablak.
+		w.Destroy()
 	}
 	w.Navigate(url)
 	w.Run()

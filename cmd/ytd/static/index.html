@@ -13,6 +13,12 @@
       <p class="sub">YouTube videó / hang letöltése · yt-dlp + ffmpeg</p>
     </header>
 
+    <div class="bitrate-row" id="cookiesRow">
+      <span>YouTube fiók</span>
+      <button id="login" type="button">Bejelentkezés</button>
+      <button id="loginDone" type="button" hidden>Belépés kész</button>
+    </div>
+
     <div class="field">
       <span>YouTube URL</span>
       <div class="url-row">
@@ -23,13 +29,16 @@
           </svg>
         </button>
       </div>
+      <p id="qualityHint" class="hint" hidden></p>
     </div>
 
-    <section class="card">
+    <div class="format-row">
+      <img id="cover" class="cover" alt="A klip borítóképe" hidden />
+      <section class="card">
       <div class="label">Formátum</div>
       <div class="formats">
         <label><input type="radio" name="format" value="mp3" checked /> MP3</label>
-        <label><input type="radio" name="format" value="mp4" /> MP4 (legmagasabb minőség)</label>
+        <label><input type="radio" name="format" value="mp4" /> MP4</label>
         <label><input type="radio" name="format" value="wav" /> WAV</label>
       </div>
       <label class="bitrate-row" id="bitrateRow">
@@ -41,7 +50,17 @@
         </select>
         <span class="unit">kbps</span>
       </label>
-    </section>
+      <label class="bitrate-row disabled" id="resolutionRow">
+        <span>MP4 felbontás</span>
+        <select id="resolution" disabled>
+          <option value="720">720p</option>
+          <option value="1080" selected>1080p</option>
+          <option value="1440">2K (1440p)</option>
+          <option value="2160">4K (2160p)</option>
+        </select>
+      </label>
+      </section>
+    </div>
 
     <div class="field">
       <span>Mentési mappa</span>
