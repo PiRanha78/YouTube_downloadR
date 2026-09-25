@@ -298,8 +298,11 @@ async function refreshStatus() {
     } catch (_) {}
     destEl.value = saved || data.downloads;
   }
+  const auth = data.authOk
+    ? `YouTube: belépve (${data.authBrowser || "?"})`
+    : "YouTube: nincs mentett belépés";
   toolsEl.textContent =
-    `yt-dlp: ${data.ytDlpOk ? "OK" : "HIÁNYZIK"}  ·  ffmpeg: ${data.ffmpegOk ? "OK" : "HIÁNYZIK"}\n` +
+    `yt-dlp: ${data.ytDlpOk ? "OK" : "HIÁNYZIK"}  ·  ffmpeg: ${data.ffmpegOk ? "OK" : "HIÁNYZIK"}  ·  ${auth}\n` +
     `${data.ytDlpPath}\n${data.ffmpegPath}`;
   setBusy(!!data.busy);
   if (!data.busy && !lastFolder) {
@@ -343,7 +346,7 @@ urlEl.addEventListener("input", () => {
 });
 loginBtn.addEventListener("click", async () => {
   loginBtn.disabled = true;
-  setDlUI({ state: "Belépő ablak nyílik…" });
+  setDlUI({ state: "YouTube belépés ellenőrzése…" });
   try {
     const res = await fetch("/api/login", {
       method: "POST",
@@ -352,12 +355,34 @@ loginBtn.addEventListener("click", async () => {
     });
     const data = await res.json();
     if (!res.ok || !data.ok) {
-      setDlUI({ state: data.error || "A belépő ablak nem nyílt meg.", mode: "fail" });
+      setDlUI({ state: data.error || "A belépés nem sikerült.", mode: "fail" });
       syncAccountButtons();
       return;
     }
-    loginDoneBtn.hidden = false;
-    setDlUI({ state: "Jelentkezz be a megnyílt ablakban, majd kattints a Belépés kész gombra." });
+    if (data.alreadyLoggedIn || data.imported) {
+      loginDoneBtn.hidden = true;
+      const how = data.imported ? "átvéve a böngészőprofilból" : "már mentve";
+      setDlUI({
+        state: `YouTube belépés ${how}${data.browser ? " (" + data.browser + ")" : ""}.`,
+        mode: "done",
+      });
+      if (data.videoUrl) urlEl.value = data.videoUrl;
+      probeCache = null;
+      scheduleProbe(true);
+      syncAccountButtons();
+      return;
+    }
+    if (data.needFinish || data.already) {
+      loginDoneBtn.hidden = false;
+      setDlUI({
+        state: "Jelentkezz be a megnyílt ablakban, majd kattints a Belépés kész gombra.",
+      });
+    } else {
+      loginDoneBtn.hidden = true;
+      setDlUI({ state: "YouTube belépés kész.", mode: "done" });
+      probeCache = null;
+      scheduleProbe(true);
+    }
   } catch (err) {
     setDlUI({ state: "Belépés hiba: " + err, mode: "fail" });
   }

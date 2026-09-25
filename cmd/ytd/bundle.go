@@ -10,7 +10,7 @@ import (
 	"runtime"
 )
 
-const bundledStamp = "bundle-1.3.1"
+const bundledStamp = "bundle-1.3.4"
 
 func runtimeToolsDir() (string, error) {
 	var root string
@@ -70,6 +70,12 @@ func ensureBundledTools() (ytDlp, ffmpeg string, err error) {
 	}
 	if probe := filepath.Join(dir, "ffprobe.exe"); fileExists(probe) {
 		_ = os.Chmod(probe, 0o755)
+	}
+	if deno := filepath.Join(dir, "deno"); fileExists(deno) {
+		_ = os.Chmod(deno, 0o755)
+	}
+	if deno := filepath.Join(dir, "deno.exe"); fileExists(deno) {
+		_ = os.Chmod(deno, 0o755)
 	}
 	if !fileExists(ytPath) || !fileExists(ffPath) {
 		return "", "", fmt.Errorf("a csomag nem tartalmazza a %s / %s fájlokat", ytName, ffName)

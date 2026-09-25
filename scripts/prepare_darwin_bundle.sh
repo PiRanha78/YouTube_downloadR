@@ -42,20 +42,33 @@ prepare_arch() {
     fi
   fi
 
-  chmod +x "$dir/yt-dlp" "$dir/ffmpeg" "$dir/ffprobe"
-  file "$dir/yt-dlp" "$dir/ffmpeg" "$dir/ffprobe"
+  echo "  deno (EJS / YouTube challenge)..."
+  local deno_zip deno_url
+  if [[ "$arch" == "amd64" ]]; then
+    deno_url="https://github.com/denoland/deno/releases/latest/download/deno-x86_64-apple-darwin.zip"
+  else
+    deno_url="https://github.com/denoland/deno/releases/latest/download/deno-aarch64-apple-darwin.zip"
+  fi
+  deno_zip="$dir/deno.zip"
+  curl -fsSL -o "$deno_zip" "$deno_url"
+  (cd "$dir" && unzip -o -q deno.zip && rm -f deno.zip)
+  chmod +x "$dir/deno"
+
+  chmod +x "$dir/yt-dlp" "$dir/ffmpeg" "$dir/ffprobe" "$dir/deno"
+  file "$dir/yt-dlp" "$dir/ffmpeg" "$dir/ffprobe" "$dir/deno"
   # Csak natív archon futtassuk a verzióchecket
   local host
   host="$(uname -m)"
   if { [[ "$arch" == "amd64" && "$host" == "x86_64" ]] || [[ "$arch" == "arm64" && "$host" == "arm64" ]]; }; then
     "$dir/ffmpeg" -version | head -1
     "$dir/yt-dlp" --version
+    "$dir/deno" --version | head -1
   else
     echo "  (verziócheck kihagyva - cross-arch)"
   fi
 
   rm -f "$BUNDLE/$zipname"
-  (cd "$dir" && zip -9 -q "$BUNDLE/$zipname" yt-dlp ffmpeg ffprobe)
+  (cd "$dir" && zip -9 -q "$BUNDLE/$zipname" yt-dlp ffmpeg ffprobe deno)
   ls -lh "$BUNDLE/$zipname"
 }
 

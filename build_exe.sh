@@ -18,10 +18,16 @@ cp -f "$APP/yt-dlp.exe" "$STAGE/yt-dlp.exe"
 cp -f "$FFBIN/ffmpeg.exe" "$STAGE/ffmpeg.exe"
 cp -f "$FFBIN/ffprobe.exe" "$STAGE/ffprobe.exe"
 
+echo "    deno (EJS)..."
+DENO_ZIP="$STAGE/deno.zip"
+curl -fsSL -o "$DENO_ZIP" "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip"
+(cd "$STAGE" && unzip -o -q deno.zip && rm -f deno.zip)
+test -f "$STAGE/deno.exe"
+
 rm -f "$ZIP"
 (
   cd "$STAGE"
-  zip -9 -q "$ZIP" yt-dlp.exe ffmpeg.exe ffprobe.exe
+  zip -9 -q "$ZIP" yt-dlp.exe ffmpeg.exe ffprobe.exe deno.exe
 )
 echo "    tools_windows.zip: $(du -h "$ZIP" | awk '{print $1}')"
 

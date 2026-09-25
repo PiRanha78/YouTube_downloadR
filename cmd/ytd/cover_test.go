@@ -51,7 +51,7 @@ func TestCropSquareJPEG(t *testing.T) {
 }
 
 func TestReplaceMP3Cover(t *testing.T) {
-	ffmpeg := filepath.Join(os.Getenv("LOCALAPPDATA"), "YouTube_DownloadR", "runtime", "bundle-1.3.1", "ffmpeg.exe")
+	ffmpeg := filepath.Join(os.Getenv("LOCALAPPDATA"), "YouTube_DownloadR", "runtime", "bundle-1.3.4", "ffmpeg.exe")
 	ffprobe := filepath.Join(filepath.Dir(ffmpeg), "ffprobe.exe")
 	if _, err := os.Stat(ffmpeg); err != nil {
 		t.Skip(err)

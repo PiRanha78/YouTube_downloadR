@@ -126,7 +126,7 @@ func (s *server) fetchVideoFormats(ctx context.Context, url, dest, cookies strin
 		"--print", "FILE %(filename)s",
 		"-J",
 	}
-	args = append(args, jsRuntimeArgs()...)
+	args = append(args, jsRuntimeArgs(s.ytDlp)...)
 	args = append(args, "--extractor-args", "youtube:player_client=default,web_safari", url)
 	cmd := exec.CommandContext(ctx, s.ytDlp, args...)
 	hideWindow(cmd)

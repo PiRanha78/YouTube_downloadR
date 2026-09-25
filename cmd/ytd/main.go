@@ -30,7 +30,7 @@ import (
 
 const (
 	appTitle   = "YouTube DownloadR"
-	appVersion = "1.3.1"
+	appVersion = "1.3.4"
 )
 
 //go:embed static/*
@@ -63,6 +63,8 @@ type statusResp struct {
 	FfmpegPath string `json:"ffmpegPath"`
 	Downloads  string `json:"downloads"`
 	Busy       bool   `json:"busy"`
+	AuthOK     bool   `json:"authOk"`
+	AuthBrowser string `json:"authBrowser,omitempty"`
 }
 
 type downloadReq struct {
@@ -227,15 +229,18 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if !fileExists(s.ffmpeg) {
 		s.ffmpeg = findFfmpeg(s.base)
 	}
+	authBrowser := savedAuthBrowser()
 	resp := statusResp{
-		Title:      appTitle,
-		Version:    appVersion,
-		YtDlpOK:    s.ytDlp != "",
-		FfmpegOK:   s.ffmpeg != "",
-		YtDlpPath:  orDefault(s.ytDlp, filepath.Join(s.base, "app", "yt-dlp.exe")),
-		FfmpegPath: orDefault(s.ffmpeg, filepath.Join(s.base, "app", "ffmpeg-8.0.1-essentials_build", "bin", "ffmpeg.exe")),
-		Downloads:  defaultDownloadsDir(s.base),
-		Busy:       busy,
+		Title:       appTitle,
+		Version:     appVersion,
+		YtDlpOK:     s.ytDlp != "",
+		FfmpegOK:    s.ffmpeg != "",
+		YtDlpPath:   orDefault(s.ytDlp, filepath.Join(s.base, "app", "yt-dlp.exe")),
+		FfmpegPath:  orDefault(s.ffmpeg, filepath.Join(s.base, "app", "ffmpeg-8.0.1-essentials_build", "bin", "ffmpeg.exe")),
+		Downloads:   defaultDownloadsDir(s.base),
+		Busy:        busy,
+		AuthOK:      authBrowser != "",
+		AuthBrowser: authBrowser,
 	}
 	writeJSON(w, resp)
 }
@@ -428,6 +433,14 @@ func (s *server) doDownload(ctx context.Context, url, destRoot, format, bitrate,
 		return
 	}
 	s.emit("YouTube fiók: mentett sütik (" + cookiesBrowser + ")")
+	if !hasJSRuntime(s.ytDlp) {
+		s.emit("FIGYELEM: nincs JavaScript runtime (Deno/Node) — az age-restricted / aláírásos YouTube videók bukhatnak.")
+	} else {
+		jsArgs := jsRuntimeArgs(s.ytDlp)
+		if len(jsArgs) >= 2 {
+			s.emit("JS runtime: " + jsArgs[1])
+		}
+	}
 
 	playlist := isPlaylistURL(url)
 	outDir := destRoot
@@ -570,7 +583,7 @@ func (s *server) buildArgs(url, outDir, format, bitrate, resolution, cookiesPath
 	if overwrite {
 		common = append(common, "--force-overwrites")
 	}
-	common = append(common, jsRuntimeArgs()...)
+	common = append(common, jsRuntimeArgs(s.ytDlp)...)
 	// Korhatáros videón a https-sávok gyakran hiányoznak, a web_safari HLS viszont megadja az 1080-at.
 	common = append(common, "--extractor-args", "youtube:player_client=default,web_safari")
 	switch format {
